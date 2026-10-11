@@ -1,0 +1,12 @@
+name = "dbi"
+author = "ytnobody"
+description = "driver-agnostic database interface (DBI) written in pure Calcium"
+license = "MIT"
+keywords = ["database", "dbi", "sql", "interface", "db"]
+entry = "mod.ca"
+
+# Dependencies - only external modules need to be listed here
+# Core modules (core.*) are part of stdlib and don't need to be declared
+#
+# [dependencies]
+# "author/module" = "^1.0.0"

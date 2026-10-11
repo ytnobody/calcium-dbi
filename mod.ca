@@ -1,0 +1,224 @@
+// dbi - Database Interface for Calcium
+// Author: YTNOBODY
+// License: MIT
+//
+// A DBI-style database interface implemented in PURE Calcium.
+//
+// The module deliberately references NO Go/VM primitives directly and depends
+// on no baked-in database driver. Database backends are injected by the caller
+// as "adapter" hashes of functions (dependency injection). This keeps the DBI
+// layer portable: the same code works against any host or driver, and it can be
+// unit-tested with a purely in-memory fake driver.
+//
+// The standard-library modules `core.string` and `core.types` are used only for
+// the primitive-free, driver-agnostic plumbing (string ops / type reflection);
+// all database behaviour comes from whatever adapter the caller supplies.
+//
+// ============================================================================
+// ADAPTER CONTRACT
+//
+// A driver adapter is a hash of callables with these keys:
+//
+//   name                        : string (human readable driver name)
+//   connect(dsn, options)              -> success(handle) | failure(msg)
+//   disconnect(handle)                 -> success(any)    | failure(msg)
+//   execute(handle, sql, params)       -> success(rowsAffected) | failure(msg)
+//   query(handle, sql, params)         -> success(rows)    | failure(msg)
+//   prepare(handle, sql)               -> success(stmtHandle) | failure(msg)
+//   execute_prepared(stmtHandle, params)-> success(rowsAffected) | failure(msg)
+//   query_prepared(stmtHandle, params) -> success(rows)    | failure(msg)
+//   finish(stmtHandle)                 -> success(any)    | failure(msg)
+//
+// `handle` / `stmtHandle` / `rows` are opaque values owned by the adapter.
+// `rows` should be an array of hashes (column name -> value) when the query
+// returns tabular data.
+// ============================================================================
+
+namespace dbi;
+
+use core.string;
+use core.types;
+
+// ============================================================
+// Public API
+// ============================================================
+
+// connect() opens a database handle using an injected driver adapter.
+//   dbi.connect(adapter, dsn[, options])  -> success(dbh) | failure(msg)
+// Note: options is a required (possibly empty) hash; pass {} when unset.
+func connect(adapter, dsn, options) = _connect_checked(adapter, dsn, options, _check_adapter(adapter));
+
+// disconnect() closes a database handle.
+func disconnect(dbh) = _disconnect_from(_require_dbh(dbh));
+
+// execute() runs a non-query statement (DDL / DML). `params` is an array of
+// positional parameters (use [] when none).
+func execute(dbh, sql, params) = _execute_from(_require_dbh(dbh), sql, params);
+
+// query() runs a SELECT and returns success(rows) where rows is an array of
+// hashes (column -> value).
+func query(dbh, sql, params) = _query_from(_require_dbh(dbh), sql, params);
+
+// query_row() like query() but returns only the first row (success(row)) or
+// failure("no rows returned").
+func query_row(dbh, sql, params) = _query_row_from(_query_from(_require_dbh(dbh), sql, params));
+
+// prepare() compiles a statement for reuse with bound parameters.
+//   -> success(stmt) | failure(msg)
+func prepare(dbh, sql) = _prepare_from(_require_dbh(dbh), sql);
+
+// execute_prepared() runs a prepared statement (non-query).
+func execute_prepared(stmt, params) = _execp_from(_require_stmt(stmt), params);
+
+// query_prepared() runs a prepared SELECT.
+func query_prepared(stmt, params) = _queryp_from(_require_stmt(stmt), params);
+
+// finish() releases a prepared statement.
+func finish(stmt) = _finish_from(_require_stmt(stmt));
+
+// quote() returns a SQL literal for a value (safe for interpolation):
+//   int/float -> untokenized, string -> '...' with '' escaping,
+//   bool -> 1/0, null -> NULL, array -> (v1,v2,...)
+func quote(v) = _quote(v, types.type_of(v));
+
+// ============================================================
+// connect() internals
+// ============================================================
+
+_REQUIRED = ["connect", "disconnect", "execute", "query",
+             "prepare", "execute_prepared", "query_prepared", "finish"];
+
+func _connect_checked(adapter, dsn, options, check) = check !? {
+    success(_) => _connect(adapter, dsn, options)
+    failure(e) => failure(e)
+};
+
+func _connect(adapter, dsn, options) = adapter.connect(dsn, options) !? {
+    success(handle) => success({
+        driver: adapter.name,
+        adapter: adapter,
+        handle: handle,
+        open: true
+    })
+    failure(e) => failure(e)
+};
+
+// validate that a value looks like a driver adapter.
+func _check_adapter(adapter) = match !types.is_hash(adapter)
+    true => failure("dbi.connect: adapter must be a hash of driver functions")
+    false => _check_methods(adapter, _REQUIRED);
+
+func _check_methods(adapter, required) = match len(required)
+    0 => success(true)
+    true => match _method_ok(adapter, head(required))
+        true => _check_methods(adapter, tail(required))
+        false => failure(concat("dbi.connect: adapter is missing a callable method: ", head(required)));
+
+func _method_ok(adapter, name) = has(adapter, name) && types.is_function(get(adapter, name));
+
+// ============================================================
+// handle / statement validation
+// ============================================================
+
+func _require_dbh(dbh) = match !types.is_hash(dbh)
+    true => failure("dbi: expected a database handle (returned by dbi.connect)")
+    false => _require_dbh_fields(dbh, has(dbh, "adapter"), has(dbh, "handle"));
+
+func _require_dbh_fields(dbh, has_adapter, has_handle) = match has_adapter && has_handle
+    true => match !types.is_hash(dbh.adapter) || !types.is_function(dbh.adapter.connect)
+        true => failure("dbi: invalid database handle")
+        false => success({adapter: dbh.adapter, handle: dbh.handle})
+    false => failure("dbi: invalid database handle");
+
+func _require_stmt(stmt) = match !types.is_hash(stmt)
+    true => failure("dbi: expected a prepared statement (returned by dbi.prepare)")
+    false => _require_stmt_fields(stmt, has(stmt, "adapter"), has(stmt, "stmt"));
+
+func _require_stmt_fields(stmt, has_adapter, has_stmt) = match has_adapter && has_stmt
+    true => success({adapter: stmt.adapter, stmt: stmt.stmt})
+    false => failure("dbi: invalid prepared statement");
+
+// ============================================================
+// dispatch to the adapter
+// ============================================================
+
+func _disconnect_from(rc) = rc !? {
+    success(ctx) => _wrap_result(ctx.adapter.disconnect(ctx.handle))
+    failure(e) => failure(e)
+};
+
+func _execute_from(rc, sql, params) = rc !? {
+    success(ctx) => _wrap_result(ctx.adapter.execute(ctx.handle, sql, params))
+    failure(e) => failure(e)
+};
+
+func _query_from(rc, sql, params) = rc !? {
+    success(ctx) => _wrap_result(ctx.adapter.query(ctx.handle, sql, params))
+    failure(e) => failure(e)
+};
+
+func _query_row_from(r) = r !? {
+    success(rows) => _peek_row(rows)
+    failure(e) => failure(e)
+};
+
+func _peek_row(rows) = match len(rows)
+    0 => failure("dbi.query_row: no rows returned")
+    true => success(head(rows));
+
+func _prepare_from(rc, sql) = rc !? {
+    success(ctx) => _prepare_dispatch(ctx.adapter, ctx.handle, sql)
+    failure(e) => failure(e)
+};
+
+func _prepare_dispatch(adapter, handle, sql) = adapter.prepare(handle, sql) !? {
+    success(stmt_handle) => success({adapter: adapter, stmt: stmt_handle, open: true})
+    failure(e) => failure(e)
+};
+
+func _execp_from(rs, params) = rs !? {
+    success(ctx) => _wrap_result(ctx.adapter.execute_prepared(ctx.stmt, params))
+    failure(e) => failure(e)
+};
+
+func _queryp_from(rs, params) = rs !? {
+    success(ctx) => _wrap_result(ctx.adapter.query_prepared(ctx.stmt, params))
+    failure(e) => failure(e)
+};
+
+func _finish_from(rs) = rs !? {
+    success(ctx) => _wrap_result(ctx.adapter.finish(ctx.stmt))
+    failure(e) => failure(e)
+};
+
+// ============================================================
+// result normalization
+// ============================================================
+
+// Ensure a driver result is a success/failure wrapper. Bare values from
+// lenient drivers are wrapped into a success.
+func _wrap_result(r) = match types.type_of(r)
+    "success" => r
+    "failure" => r
+    true => success(r);
+
+// ============================================================
+// quoting
+// ============================================================
+
+func _quote(v, t) = match t
+    "null"   => "NULL"
+    "bool"   => _quote_bool(v)
+    "int"    => to_string(v)
+    "float"  => to_string(v)
+    "string" => _quote_string(v)
+    "array"  => _quote_array(v)
+    true     => failure(concat("dbi.quote: unsupported type for quoting: ", t));
+
+func _quote_bool(v) = match v
+    true  => "1"
+    false => "0";
+
+func _quote_string(s) = concat("'", concat(string.replace(s, "'", "''"), "'"));
+
+func _quote_array(a) = concat("(", concat(string.join(map(a, v => quote(v)), ","), ")"));

@@ -1,0 +1,147 @@
+// dbi Module Test Suite
+// Tests the pure-Calcium DBI layer using an injected in-memory fake driver,
+// so no database or Go primitive is required.
+use core.io!;
+use core.assert!;
+use core.string;
+use core.types;
+use dbi;
+
+io.println("dbi Module Test Suite");
+io.println("=====================");
+
+// helper: unwrap a success/failure result to its success value
+func _ok(r) = r !? {
+    success(v) => v
+    failure(_) => "__ERR__"
+};
+
+// helper: true when a result is a failure
+func _is_failure(r) = types.type_of(r) == "failure";
+
+// ============================================================
+// Fake driver (pure Calcium, deterministic)
+// ============================================================
+
+func fake_connect(dsn, options) = success("conn-fake");
+func fake_disconnect(handle) = success(true);
+func fake_execute(handle, sql, params) = success(len(params));
+func fake_query(handle, sql, params) = success([{id: 1, name: "alice"}, {id: 2, name: "bob"}]);
+func fake_prepare(handle, sql) = success("stmt-fake");
+func fake_execute_prepared(stmt, params) = success(1);
+func fake_query_prepared(stmt, params) = success([{x: 10}]);
+func fake_finish(stmt) = success(true);
+
+fake_adapter = {
+    name: "fake",
+    connect: fake_connect,
+    disconnect: fake_disconnect,
+    execute: fake_execute,
+    query: fake_query,
+    prepare: fake_prepare,
+    execute_prepared: fake_execute_prepared,
+    query_prepared: fake_query_prepared,
+    finish: fake_finish
+};
+
+// ============================================================
+// connect()
+// ============================================================
+
+assert.section("connect");
+
+dbh = _ok(dbi.connect(fake_adapter, "db", {}));
+assert.is_type("dbh is hash", dbh, "hash");
+assert.eq("driver name", dbh.driver, "fake");
+assert.eq("handle passthrough", dbh.handle, "conn-fake");
+
+bad_adapter = {name: "x", connect: fake_connect};
+bad_result = dbi.connect(bad_adapter, "db", {});
+assert.is_true("missing method is failure", _is_failure(bad_result));
+
+num_result = dbi.connect(42, "db", {});
+assert.is_true("non-hash adapter is failure", _is_failure(num_result));
+
+opts_result = dbi.connect(fake_adapter, "db", {});
+assert.succeeds("connect with empty options", opts_result);
+
+// ============================================================
+// disconnect()
+// ============================================================
+
+assert.section("disconnect");
+
+disc_result = dbi.disconnect(dbh);
+assert.succeeds("disconnect", disc_result);
+disc_bad = dbi.disconnect({});
+assert.is_true("disconnect invalid dbh is failure", _is_failure(disc_bad));
+
+// ============================================================
+// execute() and param packing
+// ============================================================
+
+assert.section("execute / params");
+
+exec_two = dbi.execute(dbh, "s", [5, 6]);
+assert.eq("two params count = 2", _ok(exec_two), 2);
+exec_one = dbi.execute(dbh, "s", [9]);
+assert.eq("one param count = 1", _ok(exec_one), 1);
+exec_none = dbi.execute(dbh, "s", []);
+assert.eq("no params count = 0", _ok(exec_none), 0);
+exec_three = dbi.execute(dbh, "s", [1, 2, 3]);
+assert.eq("three params count = 3", _ok(exec_three), 3);
+exec_invalid = dbi.execute({}, "s", []);
+assert.is_true("execute invalid dbh is failure", _is_failure(exec_invalid));
+
+// ============================================================
+// query() / query_row()
+// ============================================================
+
+assert.section("query");
+
+rows = _ok(dbi.query(dbh, "SELECT * FROM t", []));
+assert.len_eq("query returns 2 rows", rows, 2);
+assert.eq("first row id", rows[0].id, 1);
+assert.eq("first row name", rows[0].name, "alice");
+
+row = _ok(dbi.query_row(dbh, "SELECT * FROM t", []));
+assert.eq("query_row first row", row.id, 1);
+
+// ============================================================
+// prepare() / prepared statements / finish()
+// ============================================================
+
+assert.section("prepared statements");
+
+stmt = _ok(dbi.prepare(dbh, "INSERT INTO t VALUES (?)"));
+assert.is_type("stmt is hash", stmt, "hash");
+
+sprep_exec = dbi.execute_prepared(stmt, [7]);
+assert.eq("execute_prepared", _ok(sprep_exec), 1);
+sprep_rows = dbi.query_prepared(stmt, [7]);
+assert.eq("query_prepared first row", head(_ok(sprep_rows)).x, 10);
+
+finish_result = dbi.finish(stmt);
+assert.succeeds("finish", finish_result);
+
+sprep_invalid = dbi.execute_prepared({}, []);
+assert.is_true("execute_prepared invalid stmt is failure", _is_failure(sprep_invalid));
+
+// ============================================================
+// quote()
+// ============================================================
+
+assert.section("quote");
+
+assert.eq("quote int", dbi.quote(42), "42");
+assert.eq("quote negative int", dbi.quote(-7), "-7");
+assert.eq("quote float", dbi.quote(3.5), "3.5");
+assert.eq("quote string", dbi.quote("hello"), "'hello'");
+assert.eq("quote string escapes quote", dbi.quote("it's"), "'it''s'");
+assert.eq("quote bool true", dbi.quote(true), "1");
+assert.eq("quote bool false", dbi.quote(false), "0");
+assert.eq("quote null", dbi.quote(types.null), "NULL");
+assert.eq("quote array", dbi.quote([1, 2, 3]), "(1,2,3)");
+
+assert.section("done");
+io.println("All dbi tests complete");

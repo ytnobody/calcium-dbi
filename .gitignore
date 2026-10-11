@@ -1,0 +1,7 @@
+# Local test symlink (created by CI / local testing)
+dbi/
+
+# Build artifacts
+calcium
+bone
+*.bone
