@@ -72,11 +72,14 @@ Run a SELECT and return rows.
 Response:
 
 ```json
-{"ok": true, "columns": ["id", "name"], "rows": [{"id": 1, "name": "alice"}]}
+{"ok": true, "columns": ["id", "name"], "column_types": ["INTEGER", "TEXT"], "rows": [{"id": 1, "name": "alice"}]}
 ```
 
-`rows` is an array of hashes (column name -> JSON value). `columns` is optional
-but encouraged.
+`rows` is an array of hashes (column name -> JSON value). `columns` and
+`column_types` are optional but encouraged; `column_types` holds each result
+column's declared SQL type name (parallel to `columns`). This schema metadata
+is what a driver (DBD) uses to derive per-column validators/constraints -- the
+generic DBI layer only carries it through (`query_meta`).
 
 ### `query_row`
 

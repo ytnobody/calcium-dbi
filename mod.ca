@@ -63,6 +63,13 @@ func query(dbh, sql, params) = _query_from(_require_dbh(dbh), sql, params);
 // failure("no rows returned").
 func query_row(dbh, sql, params) = _query_row_from(_query_from(_require_dbh(dbh), sql, params));
 
+// query_meta() is the driver-agnostic way to get a query's result together
+// with its schema metadata: success({columns, column_types, rows}). Derived
+// per-column constraints come from the DBD (driver), not from the generic DBI
+// layer. When an adapter does not provide query_meta, columns are derived from
+// the first row and column_types is left empty.
+func query_meta(dbh, sql, params) = _query_meta_from(_require_dbh(dbh), sql, params);
+
 // prepare() compiles a statement for reuse with bound parameters.
 //   -> success(stmt) | failure(msg)
 func prepare(dbh, sql) = _prepare_from(_require_dbh(dbh), sql);
@@ -156,6 +163,24 @@ func _query_from(rc, sql, params) = rc !? {
     success(ctx) => _wrap_result(ctx.adapter.query(ctx.handle, sql, params))
     failure(e) => failure(e)
 };
+
+func _query_meta_from(rc, sql, params) = rc !? {
+    success(ctx) => _query_meta_dispatch(ctx.adapter, ctx.handle, sql, params)
+    failure(e) => failure(e)
+};
+
+func _query_meta_dispatch(adapter, handle, sql, params) = match has(adapter, "query_meta")
+    true => _wrap_result(adapter.query_meta(handle, sql, params))
+    false => _qmeta_fallback(adapter.query(handle, sql, params));
+
+func _qmeta_fallback(r) = r !? {
+    success(rows) => success({columns: _first_row_keys(rows), column_types: [], rows: rows})
+    failure(e) => failure(e)
+};
+
+func _first_row_keys(rows) = match len(rows)
+    0 => []
+    true => keys(head(rows));
 
 func _query_row_from(r) = r !? {
     success(rows) => _peek_row(rows)

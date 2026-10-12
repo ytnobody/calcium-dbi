@@ -123,6 +123,14 @@ rows = dbi.query(dbh, "SELECT id, name FROM users WHERE id = ?", [1]) !? {
 Like `query` but returns only the first row as `success(row)`, or
 `failure("no rows returned")` when empty.
 
+## query_meta(dbh, sql, params)
+
+Runs a SELECT and returns its result **together with schema metadata**:
+`success({columns, column_types, rows})`. `column_types` holds each result
+column's declared SQL type (parallel to `columns`). This is driver-agnostic
+plumbing; deriving per-column constraints/validators from the types is done by
+the DBD (driver), not the generic DBI layer.
+
 ## prepare(dbh, sql)
 
 Compiles a statement. Returns `success(stmt)` or `failure`.
