@@ -199,11 +199,29 @@ Success:
 Error:
 
 ```json
-{"ok": false, "error": "constraint failed: NOT NULL constraint failed: users.name"}
+{"ok": false, "code": "constraint", "error": "constraint failed: NOT NULL constraint failed: users.name"}
 ```
 
-`error` is a human-readable message. Optional `code` (string) may be included
-for programmatic classification (e.g. `"constraint"`, `"syntax"`, `"io"`).
+`error` is a human-readable message. `code` is an optional stable string for
+programmatic classification; drivers should emit it so the DBI/DBD layer can
+map failures to typed errors (rather than callers string-matching `error`).
+Recommended codes:
+
+| code | meaning |
+|------|---------|
+| `connection` | could not open/connect to the backend or database |
+| `constraint` | integrity/constraint violation (NOT NULL, UNIQUE, FK, CHECK) |
+| `syntax` | SQL syntax error |
+| `not_found` | missing table/column/function |
+| `type` | datatype mismatch |
+| `io` | disk I/O error |
+| `busy` / `readonly` / `corrupt` / `full` | other SQLite conditions |
+| `empty` | a single-row request returned no rows |
+| `protocol` | malformed request/response framing |
+| `error` / `unknown` | unclassified |
+
+Drivers expose these as error constraints on the DBD side, e.g.
+`err |> sqlite.ConstraintError?` (see `dbd-sqlite`).
 
 ## Type mapping
 

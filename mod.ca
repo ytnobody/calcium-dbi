@@ -59,9 +59,11 @@ func execute(dbh, sql, params) = _execute_from(_require_dbh(dbh), sql, params);
 // hashes (column -> value).
 func query(dbh, sql, params) = _query_from(_require_dbh(dbh), sql, params);
 
-// query_row() like query() but returns only the first row (success(row)) or
-// failure("no rows returned").
-func query_row(dbh, sql, params) = _query_row_from(_query_from(_require_dbh(dbh), sql, params));
+// query_row() like query() but returns only the first row (success(row)). When
+// the adapter provides a native query_row it is used (so drivers can report an
+// empty result as their own typed error); otherwise it falls back to trimming
+// the first row of query().
+func query_row(dbh, sql, params) = _query_row_dispatch(_require_dbh(dbh), sql, params);
 
 // query_meta() is the driver-agnostic way to get a query's result together
 // with its schema metadata: success({columns, column_types, rows}). Derived
@@ -163,6 +165,15 @@ func _query_from(rc, sql, params) = rc !? {
     success(ctx) => _wrap_result(ctx.adapter.query(ctx.handle, sql, params))
     failure(e) => failure(e)
 };
+
+func _query_row_dispatch(rc, sql, params) = rc !? {
+    success(ctx) => _qrow_dispatch(ctx.adapter, ctx.handle, sql, params)
+    failure(e) => failure(e)
+};
+
+func _qrow_dispatch(adapter, handle, sql, params) = match has(adapter, "query_row")
+    true => _wrap_result(adapter.query_row(handle, sql, params))
+    false => _query_row_from(_wrap_result(adapter.query(handle, sql, params)));
 
 func _query_meta_from(rc, sql, params) = rc !? {
     success(ctx) => _query_meta_dispatch(ctx.adapter, ctx.handle, sql, params)
