@@ -96,6 +96,8 @@ Response:
 {"ok": true, "row": {"id": 1, "name": "alice"}}
 ```
 
+When no row matches, this is **not an error**: respond with `{"ok": true, "row": null}`.
+
 ### `prepare`
 
 Compile a statement for reuse.
@@ -216,7 +218,6 @@ Recommended codes:
 | `type` | datatype mismatch |
 | `io` | disk I/O error |
 | `busy` / `readonly` / `corrupt` / `full` | other SQLite conditions |
-| `empty` | a single-row request returned no rows |
 | `protocol` | malformed request/response framing |
 | `error` / `unknown` | unclassified |
 

@@ -59,10 +59,9 @@ func execute(dbh, sql, params) = _execute_from(_require_dbh(dbh), sql, params);
 // hashes (column -> value).
 func query(dbh, sql, params) = _query_from(_require_dbh(dbh), sql, params);
 
-// query_row() like query() but returns only the first row (success(row)). When
-// the adapter provides a native query_row it is used (so drivers can report an
-// empty result as their own typed error); otherwise it falls back to trimming
-// the first row of query().
+// query_row() like query() but returns only the first row as success(row), or
+// success(null) when no row matches. When the adapter provides a native
+// query_row it is used; otherwise it falls back to trimming query()'s first row.
 func query_row(dbh, sql, params) = _query_row_dispatch(_require_dbh(dbh), sql, params);
 
 // query_meta() is the driver-agnostic way to get a query's result together
@@ -198,8 +197,9 @@ func _query_row_from(r) = r !? {
     failure(e) => failure(e)
 };
 
+// No matching row is a normal empty result, represented as success(null).
 func _peek_row(rows) = match len(rows)
-    0 => failure("dbi.query_row: no rows returned")
+    0 => success(types.null)
     true => success(head(rows));
 
 func _prepare_from(rc, sql) = rc !? {
